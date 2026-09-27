@@ -1,12 +1,13 @@
 from pathlib import Path
-import sqlite3
 
 from fastapi import FastAPI
 
+from app.database import get_db
+from app.routers.box_types import router as box_types_router
+
 
 BASE_DIR = Path(__file__).resolve().parent.parent
-DB_DIR = BASE_DIR / "data"
-DB_PATH = DB_DIR / "warehouse.db"
+DB_PATH = BASE_DIR / "data" / "warehouse.db"
 SCHEMA_PATH = BASE_DIR / "db" / "schema.sql"
 
 
@@ -17,26 +18,19 @@ app = FastAPI(
 )
 
 
-def get_db():
-    DB_DIR.mkdir(parents=True, exist_ok=True)
-
-    connection = sqlite3.connect(DB_PATH)
-    connection.execute("PRAGMA foreign_keys = ON")
-
-    return connection
-
-
 def init_db():
     if DB_PATH.exists():
         return
 
     schema = SCHEMA_PATH.read_text(encoding="utf-8")
 
-    with get_db() as connection:
-        connection.executescript(schema)
+    with get_db() as db:
+        db.executescript(schema)
 
 
 init_db()
+
+app.include_router(box_types_router)
 
 
 @app.get("/")
@@ -48,8 +42,8 @@ def root():
 
 @app.get("/health")
 def health():
-    with get_db() as connection:
-        connection.execute("SELECT 1")
+    with get_db() as db:
+        db.execute("SELECT 1")
 
     return {
         "status": "ok",
