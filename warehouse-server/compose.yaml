@@ -4,4 +4,7 @@ services:
     container_name: warehouse-api
     ports:
       - "8000:8000"
+    volumes:
+      - ./data:/app/data
+      - ./db:/app/db
     restart: unless-stopped
