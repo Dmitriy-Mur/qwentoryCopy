@@ -70,12 +70,11 @@ def main():
     print('   pervaya stroka posle sortirovki po vesu:', w_first)
 
     # 4. Разделители колонок существуют
-    points = app.items_tree.itemset(app._sep_line, 'points')
-    check('razdeliteli kolonok zadany', bool(points))
+    app.table._draw_column_separators()
+    check('razdeliteli kolonok zadany', len(app.table._sep_canvas.find('all')) > 0)
 
     # 5. Скроллбар дерева скрыт, когда содержимое влезает
     app.tree._redraw_bar()
-    bar_items = int(app.tree._auto_bar.index('end')) if app.tree._auto_bar.winfo_children() or True else None
     needs = app.tree._needs_scroll
     drawn = int(app.tree._auto_bar.find('all').__len__())
     print('   derevo: needs_scroll =', needs, ', narisovano elementov =', drawn)
