@@ -8,6 +8,9 @@ from app.routers.box_types import router as box_types_router
 from app.routers.item_types import router as item_types_router
 from app.routers.boxes import router as boxes_router
 from app.routers.items import router as items_router
+from app.routers.scale import router as scale_router
+from app.routers.lookup import router as lookup_router
+from app.seed import seed_demo_data
 
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -16,12 +19,10 @@ SCHEMA_PATH = BASE_DIR / "db" / "schema.sql"
 
 app = FastAPI(
     title="Warehouse Management API",
-    description="Backend для АСУ складского учёта",
-    version="0.1.0",
+    description="Backend для АСУ складского учёта. Один источник данных для десктопа, Android и весового модуля.",
+    version="0.2.0",
 )
 
-# CORS: мобильное приложение и другие HTTP-клиенты могут обращаться к API
-# с любого источника (сервер работает без аутентификации).
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -31,14 +32,25 @@ app.add_middleware(
 )
 
 
-def init_db():
-    if DB_PATH.exists():
-        return
+def _has_schema(db) -> bool:
+    row = db.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='box_type'"
+    ).fetchone()
+    return row is not None
 
+
+def init_db():
+    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     schema = SCHEMA_PATH.read_text(encoding="utf-8")
 
     with get_db() as db:
-        db.executescript(schema)
+        if not _has_schema(db):
+            db.executescript(schema)
+
+        empty = db.execute("SELECT COUNT(*) AS n FROM box_type").fetchone()["n"] == 0
+        if empty:
+            seed_demo_data(db)
+            db.commit()
 
 
 init_db()
@@ -47,12 +59,16 @@ app.include_router(box_types_router)
 app.include_router(item_types_router)
 app.include_router(boxes_router)
 app.include_router(items_router)
+app.include_router(scale_router)
+app.include_router(lookup_router)
 
 
 @app.get("/")
 def root():
     return {
-        "message": "Warehouse API is running"
+        "message": "Warehouse API is running",
+        "qr": "qwentory:item:<id> | qwentory:type:<id> | qwentory:box:<id>",
+        "scale": "GET/POST /scale, serial line WEIGHT:<grams>",
     }
 
 
@@ -63,5 +79,6 @@ def health():
 
     return {
         "status": "ok",
-        "database": "ok"
+        "database": "ok",
+        "database_path": str(DB_PATH),
     }
