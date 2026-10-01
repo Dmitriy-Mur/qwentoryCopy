@@ -31,6 +31,16 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# CORS: мобильное приложение и другие HTTP-клиенты могут обращаться к API
+# с любого источника (сервер работает без аутентификации).
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 
 def _has_schema(db) -> bool:
     row = db.execute(

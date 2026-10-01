@@ -95,11 +95,11 @@ class AutoScrollbar(ttk.Scrollbar):
     def set(self, lo, hi):
         if float(lo) <= 0.0 and float(hi) >= 1.0:
             # содержимое помещается целиком — прячем скроллбар
-            self.pack_forget()
+            self.forget()
             # блокируем отрисовку ползунка
             super().set(0.0, 1.0)
             return
-        if not self.winfo_manager() or not self.winfo_ismapped():
+        if not self.winfo_manager():
             self._autoshow()
         super().set(lo, hi)
 
@@ -144,6 +144,19 @@ class DarkTableFrame(ctk.CTkFrame):
         self._vbar._auto_place = (self._vbar.pack, (), {'side': 'right', 'fill': 'y'})
         self._hbar._auto_place = (self._hbar.pack, (), {'side': 'bottom', 'fill': 'x'})
 
+        # Полоса разделителей колонок над таблицей создаётся здесь, до
+        # раскладки: порядок pack важен — сначала полосы скроллов по краям
+        # и линейка сверху, затем Treeview. Иначе при появлении скроллбаров
+        # полоса смещается относительно таблицы и метки колонок «съезжают».
+        self._sep_height = 6
+        self._sep_canvas = tk.Canvas(
+            self, height=self._sep_height, highlightthickness=0, bd=0,
+            bg=DARK_PANEL, cursor='tcross', takefocus=0,
+        )
+
+        self._vbar.pack(side='right', fill='y')
+        self._hbar.pack(side='bottom', fill='x')
+        self._sep_canvas.pack(side='top', fill='x')
         self.tree.pack(side='left', fill='both', expand=True)
 
         for col in (columns or ()):
@@ -157,33 +170,12 @@ class DarkTableFrame(ctk.CTkFrame):
         self.tree.tag_configure('evenrow', background=DARK_PANEL)
         self._row_count = 0
 
-        # Разделители колонок: Treeview не умеет рисовать линии между
-        # столбцами, поэтому поверх него размещается прозрачный canvas
-        # с тонкими вертикальными линиями (см. refresh_column_separators).
-        self._sep_canvas = tk.Canvas(
-            self.tree, highlightthickness=0, bd=0, bg='#000001',
-            cursor='arrow',
-        )
-        self._sep_canvas.place(relx=0, rely=0, relwidth=1, relheight=1)
-        # клики и колесо мыши должны проходить сквозь разделители к таблице
-        self._sep_canvas.bind('<Button-1>', self._sep_pass_through, add='+')
-        for event in ('<B1-Motion>', '<ButtonRelease-1>', '<Double-1>',
-                      '<MouseWheel>', '<Button-4>', '<Button-5>'):
-            self._sep_canvas.bind(event, lambda e: None, add='+')
+        # Полоса разделителей (_sep_canvas) создана выше, до раскладки.
+        self._sep_canvas.bind('<Configure>',
+                              lambda e: self.refresh_column_separators())
         self._sep_pending = None
         self.tree.bind('<Configure>',
                        lambda e: self.refresh_column_separators(), add='+')
-
-    def _sep_pass_through(self, event):
-        """Передать клик из области разделителей обратно в Treeview.
-
-        Canvas с разделителями лежит поверх всей таблицы, поэтому клики
-        по строкам и шапкам нужно перенаправлять самому Treeview — иначе
-        не работает выделение строк и сортировка по нажатию на заголовок.
-        """
-        self.tree.event_generate('<Button-1>', rootx=event.x_root,
-                                 rooty=event.y_root)
-        return None
 
     def refresh_column_separators(self):
         """Перерисовать вертикальные разделители между колонками Treeview."""
@@ -213,18 +205,18 @@ class DarkTableFrame(ctk.CTkFrame):
         total_w = sum(tree.column(c, 'width') for c in cols)
         offset = int(first * total_w)
 
-        # нижняя граница области заголовка — рисуем только под ней
-        try:
-            bbox = tree.bbox('')
-        except tk.TclError:
-            bbox = None
-        top = (bbox[1] + bbox[3]) if bbox else 0
+        # Границы колонок (метки на полосе над таблицей). Полоса лежит
+        # над Treeview, поэтому её левый край смещён относительно таблицы —
+        # координаты пересчитываются через winfo_pointerxy-независимый
+        # перевод: x_полосы = x_таблицы + (tree.rootx - canvas.rootx).
+        dx = tree.winfo_rootx() - canvas.winfo_rootx()
+        h = canvas.winfo_height()
 
-        x = -offset
+        x = -offset + dx
         for c in cols[:-1]:
             x += tree.column(c, 'width')
-            if top < x < w:
-                canvas.create_line(x, top, x, h, fill=DARK_BORDER)
+            if 0 < x < w:
+                canvas.create_line(x, 0, x, h, fill=DARK_BORDER)
 
     def _xview_command(self, *args):
         self.tree.xview(*args)
