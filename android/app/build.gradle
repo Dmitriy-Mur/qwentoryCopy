@@ -15,7 +15,11 @@ android {
 
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
 
-        buildConfigField "String", "API_BASE_URL", "\"http://10.0.2.2:8000/\""
+        // Адрес сервера можно переопределить без правки кода:
+        //   ./gradlew assembleDebug -PapiHost=192.168.1.50 -PapiPort=8000
+        def apiHost = (project.findProperty("apiHost") ?: System.getenv("API_HOST") ?: "10.0.2.2")
+        def apiPort = (project.findProperty("apiPort") ?: System.getenv("API_PORT") ?: "8000")
+        buildConfigField "String", "API_BASE_URL", "\"http://${apiHost}:${apiPort}/\""
     }
 
     buildTypes {
