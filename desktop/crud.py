@@ -1,208 +1,169 @@
-"""CRUD операции для работы с БД."""
-from typing import Optional, List
-from sqlalchemy.orm import Session, joinedload
+"""CRUD через REST API. Сигнатуры сохранены, чтобы UI не переписывать с нуля."""
+from __future__ import annotations
 
-from models import BoxType, Box, ItemType, Item
+from typing import List, Optional
 
-
-# ===== BoxType =====
-def get_all_box_types(session: Session) -> List[BoxType]:
-    return session.query(BoxType).order_by(BoxType.box_type_name).all()
+from api_client import ApiClient, ApiError
+from models import Box, BoxType, Item, ItemType
 
 
-def add_box_type(session: Session, name: str) -> BoxType:
-    bt = BoxType(box_type_name=name)
-    session.add(bt)
-    session.commit()
-    session.refresh(bt)
-    return bt
+def _link_boxes(boxes: List[Box]) -> List[Box]:
+    by_id = {box.box_id: box for box in boxes}
+    for box in boxes:
+        if box.parent_id is not None:
+            box.parent = by_id.get(box.parent_id)
+    return boxes
 
 
-def update_box_type(session: Session, box_type_id: int, name: str) -> None:
-    bt = session.get(BoxType, box_type_id)
-    if bt:
-        bt.box_type_name = name
-        session.commit()
+def get_all_box_types(client: ApiClient) -> List[BoxType]:
+    return [BoxType.from_api(row) for row in client.get("/box-types")]
 
 
-def delete_box_type(session: Session, box_type_id: int) -> None:
-    bt = session.get(BoxType, box_type_id)
-    if bt:
-        session.delete(bt)
-        session.commit()
+def add_box_type(client: ApiClient, name: str) -> BoxType:
+    return BoxType.from_api(client.post("/box-types", {"name": name}))
 
 
-# ===== Box =====
-def get_all_boxes(session: Session) -> List[Box]:
-    return session.query(Box).options(joinedload(Box.box_type)).all()
+def get_all_boxes(client: ApiClient) -> List[Box]:
+    return _link_boxes([Box.from_api(row) for row in client.get("/boxes")])
 
 
-def get_root_boxes(session: Session) -> List[Box]:
-    return session.query(Box).filter(Box.parent_id.is_(None)).options(joinedload(Box.box_type)).all()
+def get_root_boxes(client: ApiClient) -> List[Box]:
+    return [box for box in get_all_boxes(client) if box.parent_id is None]
 
 
-def get_child_boxes(session: Session, parent_id: Optional[int]) -> List[Box]:
+def get_child_boxes(client: ApiClient, parent_id: Optional[int]) -> List[Box]:
     if parent_id is None:
-        return get_root_boxes(session)
-    return session.query(Box).filter(Box.parent_id == parent_id).options(joinedload(Box.box_type)).all()
+        return get_root_boxes(client)
+    return [box for box in get_all_boxes(client) if box.parent_id == parent_id]
 
 
-def get_box_by_id(session: Session, box_id: int) -> Optional[Box]:
-    return session.get(Box, box_id)
+def get_box_by_id(client: ApiClient, box_id: int) -> Optional[Box]:
+    try:
+        box = Box.from_api(client.get(f"/boxes/{box_id}"))
+    except ApiError as error:
+        if error.status == 404:
+            return None
+        raise
+    by_id = {b.box_id: b for b in get_all_boxes(client)}
+    current = by_id.get(box.box_id, box)
+    return current
 
 
-def add_box(session: Session, name: str, box_type_id: int, parent_id: Optional[int]) -> Box:
-    box = Box(box_name=name, box_type_id=box_type_id, parent_id=parent_id)
-    session.add(box)
-    session.commit()
-    session.refresh(box)
-    return box
+def add_box(client: ApiClient, name: str, box_type_id: int, parent_id: Optional[int]) -> Box:
+    return Box.from_api(client.post("/boxes", {
+        "name": name,
+        "box_type_id": box_type_id,
+        "parent_id": parent_id,
+    }))
 
 
-def update_box(session: Session, box_id: int, name: str, box_type_id: int, parent_id: Optional[int]) -> None:
-    box = session.get(Box, box_id)
-    if box:
-        box.box_name = name
-        box.box_type_id = box_type_id
-        box.parent_id = parent_id
-        session.commit()
+def update_box(
+    client: ApiClient,
+    box_id: int,
+    name: str,
+    box_type_id: int,
+    parent_id: Optional[int],
+) -> None:
+    client.patch(f"/boxes/{box_id}", {"name": name, "box_type_id": box_type_id})
+    client.post(f"/boxes/{box_id}/move", {"parent_id": parent_id})
 
 
-def delete_box(session: Session, box_id: int) -> int:
-    """Удалить контейнер и всех потомков. Товары остаются с box_id=None.
-    Возвращает количество затронутых товаров."""
-    box = session.query(Box).get(box_id)
-    if not box:
-        return 0
-
-    # Собираем все ID потомков
-    affected_count = 0
-    ids_to_delete = _collect_descendant_ids(session, box_id)
-    ids_to_delete.append(box_id)
-
-    # Обнуляем box_id у товаров
-    items = session.query(Item).filter(Item.box_id.in_(ids_to_delete)).all()
-    affected_count = len(items)
-    for item in items:
-        item.box_id = None
-
-    # Удаляем контейнеры
-    session.query(Box).filter(Box.box_id.in_(ids_to_delete)).delete(synchronize_session=False)
-    session.commit()
-    return affected_count
+def delete_box(client: ApiClient, box_id: int) -> int:
+    result = client.delete(f"/boxes/{box_id}") or {}
+    return int(result.get("unboxed") or 0)
 
 
-def _collect_descendant_ids(session: Session, parent_id: int) -> List[int]:
-    result = []
-    children = session.query(Box).filter(Box.parent_id == parent_id).all()
-    for child in children:
-        result.append(child.box_id)
-        result.extend(_collect_descendant_ids(session, child.box_id))
-    return result
-
-
-def get_box_full_path(session: Session, box_id: Optional[int]) -> str:
+def get_box_full_path(client: ApiClient, box_id: Optional[int]) -> str:
     if box_id is None:
-        return 'Без расположения'
-    box = session.get(Box, box_id)
+        return "Без расположения"
+    box = get_box_by_id(client, box_id)
     if not box:
-        return 'Без расположения'
+        return "Без расположения"
     return box.full_path
 
 
-# ===== ItemType =====
-def get_all_item_types(session: Session) -> List[ItemType]:
-    return session.query(ItemType).order_by(ItemType.item_type_name).all()
+def get_all_item_types(client: ApiClient) -> List[ItemType]:
+    return [ItemType.from_api(row) for row in client.get("/item-types")]
 
 
-def add_item_type(session: Session, name: str, weight_g: Optional[int]) -> ItemType:
-    it = ItemType(item_type_name=name, weight_g=weight_g)
-    session.add(it)
-    session.commit()
-    session.refresh(it)
-    return it
+def add_item_type(client: ApiClient, name: str, weight_g: Optional[int]) -> ItemType:
+    return ItemType.from_api(client.post("/item-types", {"name": name, "weight_g": weight_g}))
 
 
-def update_item_type(session: Session, item_type_id: int, name: str, weight_g: Optional[int]) -> None:
-    it = session.get(ItemType, item_type_id)
-    if it:
-        it.item_type_name = name
-        it.weight_g = weight_g
-        session.commit()
+def update_item_type(client: ApiClient, item_type_id: int, name: str, weight_g: Optional[int]) -> None:
+    client.patch(f"/item-types/{item_type_id}", {"name": name, "weight_g": weight_g})
 
 
-def delete_item_type(session: Session, item_type_id: int) -> None:
-    it = session.get(ItemType, item_type_id)
-    if it:
-        session.delete(it)
-        session.commit()
-
-
-# ===== Item =====
-def get_all_items(session: Session) -> List[Item]:
-    return session.query(Item).options(
-        joinedload(Item.item_type),
-        joinedload(Item.box).joinedload(Box.box_type)
-    ).all()
-
-
-def get_items_by_box(session: Session, box_id: int, include_children: bool = True) -> List[Item]:
-    if not include_children:
-        return session.query(Item).filter(Item.box_id == box_id).options(
-            joinedload(Item.item_type),
-            joinedload(Item.box).joinedload(Box.box_type)
-        ).all()
-
-    ids = [box_id] + _collect_descendant_ids(session, box_id)
-    return session.query(Item).filter(Item.box_id.in_(ids)).options(
-        joinedload(Item.item_type),
-        joinedload(Item.box).joinedload(Box.box_type)
-    ).all()
-
-
-def get_items_without_box(session: Session) -> List[Item]:
-    return session.query(Item).filter(Item.box_id.is_(None)).options(
-        joinedload(Item.item_type),
-        joinedload(Item.box).joinedload(Box.box_type)
-    ).all()
-
-
-def add_item(session: Session, item_type_id: int, box_id: Optional[int], quantity: int) -> Item:
-    item = Item(item_type_id=item_type_id, box_id=box_id, quantity=quantity)
-    session.add(item)
-    session.commit()
-    session.refresh(item)
+def get_item_by_id(client: ApiClient, item_id: int) -> Optional[Item]:
+    try:
+        item = Item.from_api(client.get(f"/items/{item_id}"))
+    except ApiError as error:
+        if error.status == 404:
+            return None
+        raise
+    _attach_boxes(client, [item])
     return item
 
 
-def update_item(session: Session, item_id: int, item_type_id: int, box_id: Optional[int], quantity: int) -> None:
-    item = session.get(Item, item_id)
-    if item:
-        item.item_type_id = item_type_id
-        item.box_id = box_id
-        item.quantity = quantity
-        session.commit()
+def get_all_items(client: ApiClient) -> List[Item]:
+    items = [Item.from_api(row) for row in client.get("/items")]
+    _attach_boxes(client, items)
+    return items
 
 
-def delete_item(session: Session, item_id: int) -> None:
-    item = session.get(Item, item_id)
-    if item:
-        session.delete(item)
-        session.commit()
+def get_items_by_box(client: ApiClient, box_id: int, include_children: bool = True) -> List[Item]:
+    items = [
+        Item.from_api(row)
+        for row in client.get("/items", {"box_id": box_id, "include_children": str(include_children).lower()})
+    ]
+    _attach_boxes(client, items)
+    return items
 
 
-def search_items(session: Session, query: str) -> List[Item]:
-    """Поиск по названию типа товара и расположению."""
-    q = f'%{query.lower()}%'
-    items = session.query(Item).options(
-        joinedload(Item.item_type),
-        joinedload(Item.box).joinedload(Box.box_type)
-    ).all()
+def get_items_without_box(client: ApiClient) -> List[Item]:
+    items = [Item.from_api(row) for row in client.get("/items", {"unboxed": "true"})]
+    return items
 
+
+def add_item(client: ApiClient, item_type_id: int, box_id: Optional[int], quantity: int) -> Item:
+    return Item.from_api(client.post("/items", {
+        "item_type_id": item_type_id,
+        "box_id": box_id,
+        "quantity": quantity,
+    }))
+
+
+def update_item(
+    client: ApiClient,
+    item_id: int,
+    item_type_id: int,
+    box_id: Optional[int],
+    quantity: int,
+) -> None:
+    client.patch(f"/items/{item_id}", {
+        "item_type_id": item_type_id,
+        "box_id": box_id,
+        "quantity": quantity,
+    })
+
+
+def delete_item(client: ApiClient, item_id: int) -> None:
+    client.delete(f"/items/{item_id}")
+
+
+def search_items(client: ApiClient, query: str) -> List[Item]:
+    needle = query.lower().strip()
     result = []
-    for item in items:
-        type_name = item.item_type.item_type_name.lower() if item.item_type else ''
-        location = get_box_full_path(session, item.box_id).lower()
-        if q.strip('%') in type_name or q.strip('%') in location:
+    for item in get_all_items(client):
+        type_name = (item.item_type.item_type_name if item.item_type else "").lower()
+        location = get_box_full_path(client, item.box_id).lower()
+        if needle in type_name or needle in location:
             result.append(item)
     return result
+
+
+def _attach_boxes(client: ApiClient, items: List[Item]) -> None:
+    boxes = {box.box_id: box for box in get_all_boxes(client)}
+    for item in items:
+        if item.box_id is not None and item.box_id in boxes:
+            item.box = boxes[item.box_id]

@@ -224,22 +224,60 @@ def create_box(box: BoxCreate):
 @router.delete("/{box_id}")
 def delete_box(box_id: int):
     with get_db() as db:
-        cursor = db.execute(
-            """
-            DELETE FROM box
-            WHERE box_id = ?
-            """,
-            (box_id,)
-        )
+        exists = db.execute(
+            "SELECT 1 FROM box WHERE box_id = ?",
+            (box_id,),
+        ).fetchone()
+        if exists is None:
+            raise HTTPException(status_code=404, detail="Box not found")
 
-        if cursor.rowcount == 0:
-            raise HTTPException(
-                status_code=404,
-                detail="Box not found"
+        subtree = db.execute(
+            """
+            WITH RECURSIVE subtree(id) AS (
+                SELECT ?
+                UNION ALL
+                SELECT b.box_id FROM box b JOIN subtree s ON b.parent_id = s.id
             )
+            SELECT id FROM subtree
+            """,
+            (box_id,),
+        ).fetchall()
+        box_ids = [row["id"] for row in subtree]
+        placeholders = ",".join("?" * len(box_ids))
+
+        items = db.execute(
+            f"SELECT item_id, item_type_id, quantity FROM item WHERE box_id IN ({placeholders})",
+            box_ids,
+        ).fetchall()
+
+        unboxed_count = 0
+        for item in items:
+            existing = db.execute(
+                """
+                SELECT item_id, quantity
+                FROM item
+                WHERE box_id IS NULL AND item_type_id = ?
+                """,
+                (item["item_type_id"],),
+            ).fetchone()
+            if existing is not None:
+                db.execute(
+                    "UPDATE item SET quantity = quantity + ? WHERE item_id = ?",
+                    (item["quantity"], existing["item_id"]),
+                )
+                db.execute("DELETE FROM item WHERE item_id = ?", (item["item_id"],))
+            else:
+                db.execute(
+                    "UPDATE item SET box_id = NULL WHERE item_id = ?",
+                    (item["item_id"],),
+                )
+            unboxed_count += 1
+
+        db.execute("DELETE FROM box WHERE box_id = ?", (box_id,))
 
     return {
-        "message": "Box deleted"
+        "message": "Box deleted",
+        "unboxed": unboxed_count,
     }
 
 

@@ -3,16 +3,15 @@ import customtkinter as ctk
 from tkinter import messagebox
 from typing import Optional
 
-from sqlalchemy.orm import Session
-
+from api_client import ApiClient
 import crud
 from models import Box, ItemType, Item
 
 
 class BoxDialog:
     """Диалог создания/редактирования контейнера."""
-    def __init__(self, parent, session: Session, mode: str, box: Optional[Box] = None, parent_id: Optional[int] = None):
-        self.session = session
+    def __init__(self, parent, client: ApiClient, mode: str, box: Optional[Box] = None, parent_id: Optional[int] = None):
+        self.client = client
         self.mode = mode
         self.box = box
         self.result = False
@@ -37,7 +36,7 @@ class BoxDialog:
         parent_combo.grid(row=0, column=1, pady=5)
 
         parents = [('', None)]  # Корень
-        all_boxes = crud.get_all_boxes(self.session)
+        all_boxes = crud.get_all_boxes(self.client)
         if self.mode == 'edit' and self.box:
             exclude_ids = self._get_descendant_ids(self.box.box_id)
             exclude_ids.append(self.box.box_id)
@@ -78,7 +77,7 @@ class BoxDialog:
         type_combo = ctk.CTkComboBox(frame, variable=self.type_var, state='readonly', width=250)
         type_combo.grid(row=2, column=1, pady=5)
 
-        box_types = crud.get_all_box_types(self.session)
+        box_types = crud.get_all_box_types(self.client)
         type_values = [bt.box_type_name for bt in box_types]
         type_combo.configure(values=type_values)
         self._type_map = {bt.box_type_name: bt.box_type_id for bt in box_types}
@@ -96,7 +95,7 @@ class BoxDialog:
 
     def _get_descendant_ids(self, box_id: int):
         result = []
-        children = crud.get_child_boxes(self.session, box_id)
+        children = crud.get_child_boxes(self.client, box_id)
         for child in children:
             result.append(child.box_id)
             result.extend(self._get_descendant_ids(child.box_id))
@@ -119,9 +118,9 @@ class BoxDialog:
 
         try:
             if self.mode == 'add':
-                crud.add_box(self.session, name, box_type_id, parent_id)
+                crud.add_box(self.client, name, box_type_id, parent_id)
             else:
-                crud.update_box(self.session, self.box.box_id, name, box_type_id, parent_id)
+                crud.update_box(self.client, self.box.box_id, name, box_type_id, parent_id)
             self.result = True
             self.dialog.destroy()
         except Exception as e:
@@ -130,8 +129,8 @@ class BoxDialog:
 
 class ItemTypeDialog:
     """Диалог создания/редактирования типа товара."""
-    def __init__(self, parent, session: Session, mode: str, item_type: Optional[ItemType] = None):
-        self.session = session
+    def __init__(self, parent, client: ApiClient, mode: str, item_type: Optional[ItemType] = None):
+        self.client = client
         self.mode = mode
         self.item_type = item_type
         self.result = False
@@ -183,9 +182,9 @@ class ItemTypeDialog:
 
         try:
             if self.mode == 'add':
-                crud.add_item_type(self.session, name, weight_g)
+                crud.add_item_type(self.client, name, weight_g)
             else:
-                crud.update_item_type(self.session, self.item_type.item_type_id, name, weight_g)
+                crud.update_item_type(self.client, self.item_type.item_type_id, name, weight_g)
             self.result = True
             self.dialog.destroy()
         except Exception as e:
@@ -194,8 +193,8 @@ class ItemTypeDialog:
 
 class ItemDialog:
     """Диалог создания/редактирования товара."""
-    def __init__(self, parent, session: Session, mode: str, item: Optional[Item] = None, default_box_id: Optional[int] = None):
-        self.session = session
+    def __init__(self, parent, client: ApiClient, mode: str, item: Optional[Item] = None, default_box_id: Optional[int] = None):
+        self.client = client
         self.mode = mode
         self.item = item
         self.result = False
@@ -219,7 +218,7 @@ class ItemDialog:
         type_combo = ctk.CTkComboBox(frame, variable=self.type_var, state='readonly', width=280)
         type_combo.grid(row=0, column=1, pady=5)
 
-        item_types = crud.get_all_item_types(self.session)
+        item_types = crud.get_all_item_types(self.client)
         type_values = []
         self._type_map = {}
         for it in item_types:
@@ -245,7 +244,7 @@ class ItemDialog:
         box_combo.grid(row=1, column=1, pady=5)
 
         boxes_options = [('Без расположения', None)]
-        all_boxes = crud.get_all_boxes(self.session)
+        all_boxes = crud.get_all_boxes(self.client)
         for b in all_boxes:
             boxes_options.append((b.full_path, b.box_id))
 
@@ -302,9 +301,9 @@ class ItemDialog:
 
         try:
             if self.mode == 'add':
-                crud.add_item(self.session, item_type_id, box_id, quantity)
+                crud.add_item(self.client, item_type_id, box_id, quantity)
             else:
-                crud.update_item(self.session, self.item.item_id, item_type_id, box_id, quantity)
+                crud.update_item(self.client, self.item.item_id, item_type_id, box_id, quantity)
             self.result = True
             self.dialog.destroy()
         except Exception as e:

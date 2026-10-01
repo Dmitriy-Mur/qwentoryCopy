@@ -1,11 +1,12 @@
 """Главное окно приложения на customtkinter."""
 import re
+import io
 
 import customtkinter as ctk
 from tkinter import messagebox
 from typing import Optional, List
 
-from sqlalchemy.orm import Session
+from api_client import ApiClient, ApiError
 
 import crud
 from models import Box, ItemType, Item
@@ -190,9 +191,10 @@ class MainWindow:
         ('location', 'Расположение', 250),
     )
 
-    def __init__(self, root: ctk.CTk, session: Session):
+    def __init__(self, root: ctk.CTk, client: ApiClient, scale_monitor=None):
         self.root = root
-        self.session = session
+        self.client = client
+        self.scale_monitor = scale_monitor
         self.selected_box_id: Optional[int] = None
 
         self.root.title('Складской учёт')
@@ -268,6 +270,7 @@ class MainWindow:
         ctk.CTkButton(item_btn_frame, text='+ Товар', command=self._add_item, width=100).pack(side='left', padx=2)
         ctk.CTkButton(item_btn_frame, text='✎ Изменить', command=self._edit_item, width=100).pack(side='left', padx=2)
         ctk.CTkButton(item_btn_frame, text='✕ Удалить', command=self._delete_item, width=100).pack(side='left', padx=2)
+        ctk.CTkButton(item_btn_frame, text='QR', command=self._show_qr, width=70).pack(side='left', padx=2)
 
         # Таблица товаров
         cols = tuple(c[0] for c in self.COLUMNS)
@@ -288,8 +291,45 @@ class MainWindow:
 
     # ------------------------------------------------------------------ data
     def _refresh_all(self):
-        self._refresh_tree()
-        self._refresh_items()
+        try:
+            self._refresh_tree()
+            self._refresh_items()
+        except ApiError as error:
+            messagebox.showerror('Сервер', str(error))
+
+    def _show_qr(self):
+        selection = self.items_tree.selection()
+        if not selection:
+            messagebox.showinfo('Информация', 'Выберите товар, чтобы сформировать QR-этикетку')
+            return
+        item = crud.get_item_by_id(self.client, int(selection[0]))
+        if not item:
+            return
+        try:
+            from qrutil import qr_payload, qr_png_bytes
+        except Exception as error:
+            messagebox.showerror('QR', str(error))
+            return
+
+        payload = qr_payload('item', item.item_id)
+        try:
+            png = qr_png_bytes(payload)
+            from PIL import Image
+            pil_image = Image.open(io.BytesIO(png))
+            photo = ctk.CTkImage(light_image=pil_image, dark_image=pil_image, size=(220, 220))
+        except Exception as error:
+            messagebox.showerror('QR', str(error))
+            return
+
+        dialog = ctk.CTkToplevel(self.root)
+        dialog.title('QR-этикетка')
+        dialog.geometry('360x420')
+        dialog.transient(self.root)
+        ctk.CTkLabel(dialog, text=payload, wraplength=320).pack(pady=8)
+        label = ctk.CTkLabel(dialog, image=photo, text='')
+        label.pack(pady=8)
+        dialog._qr_image = photo
+        ctk.CTkButton(dialog, text='Закрыть', command=dialog.destroy).pack(pady=8)
 
     def _refresh_tree(self):
         selected = self.selected_box_id
@@ -300,7 +340,7 @@ class MainWindow:
         self.tree.add_special_node(-1, 'Без расположения')
 
         # Полное дерево контейнеров (корни + все вложенные уровни)
-        all_boxes = crud.get_all_boxes(self.session)
+        all_boxes = crud.get_all_boxes(self.client)
         children_map: dict = {}
         for b in all_boxes:
             children_map.setdefault(b.parent_id, []).append(b)
@@ -320,7 +360,7 @@ class MainWindow:
         walk(None, 0)
 
         # Отметить узлы, у которых есть товары (для кнопки «N товаров»)
-        items = crud.get_all_items(self.session)
+        items = crud.get_all_items(self.client)
         counts: dict = {}
         for item in items:
             if item.box_id is None:
@@ -398,18 +438,18 @@ class MainWindow:
     def _collect_current_items(self) -> List[Item]:
         search_query = self.search_var.get().strip()
         if search_query:
-            items = crud.search_items(self.session, search_query)
+            items = crud.search_items(self.client, search_query)
             self.items_header.configure(text=f'Результаты поиска: {search_query}')
         elif self.selected_box_id is None:
-            items = crud.get_all_items(self.session)
+            items = crud.get_all_items(self.client)
             self.items_header.configure(text='Все товары')
         elif self.selected_box_id == -1:
-            items = crud.get_items_without_box(self.session)
+            items = crud.get_items_without_box(self.client)
             self.items_header.configure(text='Товары без расположения')
         else:
-            box = crud.get_box_by_id(self.session, self.selected_box_id)
+            box = crud.get_box_by_id(self.client, self.selected_box_id)
             if box:
-                items = crud.get_items_by_box(self.session, self.selected_box_id, include_children=True)
+                items = crud.get_items_by_box(self.client, self.selected_box_id, include_children=True)
                 self.items_header.configure(text=f'{box.box_name} — {box.full_path}')
             else:
                 items = []
@@ -424,8 +464,8 @@ class MainWindow:
             type_name = item.item_type.item_type_name if item.item_type else '—'
             weight = item.total_weight_g
             weight_str = f'{weight / 1000:.2f} кг' if weight > 1000 else f'{weight} г'
-            date_str = item.date.strftime('%Y-%m-%d %H:%M') if item.date else ''
-            location = crud.get_box_full_path(self.session, item.box_id)
+            date_str = item.date.strftime('%Y-%m-%d %H:%M') if item.date else '—'
+            location = crud.get_box_full_path(self.client, item.box_id)
             self._current_rows.append((str(item.item_id),
                                        (type_name, item.quantity, weight_str, date_str, location)))
 
@@ -435,7 +475,13 @@ class MainWindow:
         total_qty = sum(i.quantity for i in items)
         total_weight = sum(i.total_weight_g for i in items)
         weight_str = f'{total_weight / 1000:.2f} кг' if total_weight > 1000 else f'{total_weight} г'
-        self.status_var.set(f'Позиций: {len(items)} | Общее кол-во: {total_qty} | Общий вес: {weight_str}')
+        scale = ''
+        if self.scale_monitor and self.scale_monitor.last_weight is not None:
+            scale = f' | Весы: {self.scale_monitor.last_weight:.1f} г'
+        self.status_var.set(
+            f'Позиций: {len(items)} | Общее кол-во: {total_qty} | Общий вес: {weight_str}'
+            f'{scale} | API: {self.client.base_url}'
+        )
 
     def _render_items_table(self):
         keep_selection = self.items_tree.selection()
@@ -476,7 +522,7 @@ class MainWindow:
     def _add_box(self):
         from ui.dialogs import BoxDialog
         parent_id = self.selected_box_id if self.selected_box_id and self.selected_box_id > 0 else None
-        dialog = BoxDialog(self.root, self.session, mode='add', parent_id=parent_id)
+        dialog = BoxDialog(self.root, self.client, mode='add', parent_id=parent_id)
         if dialog.result:
             self._refresh_all()
 
@@ -486,11 +532,11 @@ class MainWindow:
             return
 
         from ui.dialogs import BoxDialog
-        box = crud.get_box_by_id(self.session, self.selected_box_id)
+        box = crud.get_box_by_id(self.client, self.selected_box_id)
         if not box:
             return
 
-        dialog = BoxDialog(self.root, self.session, mode='edit', box=box)
+        dialog = BoxDialog(self.root, self.client, mode='edit', box=box)
         if dialog.result:
             self._refresh_all()
 
@@ -499,12 +545,12 @@ class MainWindow:
             messagebox.showinfo('Информация', 'Выберите контейнер для удаления')
             return
 
-        box = crud.get_box_by_id(self.session, self.selected_box_id)
+        box = crud.get_box_by_id(self.client, self.selected_box_id)
         if not box:
             return
 
         if messagebox.askyesno('Подтверждение', f'Удалить контейнер "{box.box_name}"?\nТовары останутся без расположения.'):
-            affected = crud.delete_box(self.session, self.selected_box_id)
+            affected = crud.delete_box(self.client, self.selected_box_id)
             self.selected_box_id = None
             self._refresh_all()
             if affected > 0:
@@ -513,7 +559,7 @@ class MainWindow:
     # ===== Item Type CRUD =====
     def _add_item_type(self):
         from ui.dialogs import ItemTypeDialog
-        dialog = ItemTypeDialog(self.root, self.session, mode='add')
+        dialog = ItemTypeDialog(self.root, self.client, mode='add')
         if dialog.result:
             self._refresh_all()
 
@@ -521,7 +567,7 @@ class MainWindow:
     def _add_item(self):
         from ui.dialogs import ItemDialog
         default_box_id = self.selected_box_id if self.selected_box_id and self.selected_box_id > 0 else None
-        dialog = ItemDialog(self.root, self.session, mode='add', default_box_id=default_box_id)
+        dialog = ItemDialog(self.root, self.client, mode='add', default_box_id=default_box_id)
         if dialog.result:
             self._refresh_all()
 
@@ -532,12 +578,12 @@ class MainWindow:
             return
 
         item_id = int(selection[0])
-        item = self.session.get(Item, item_id)
+        item = crud.get_item_by_id(self.client, item_id)
         if not item:
             return
 
         from ui.dialogs import ItemDialog
-        dialog = ItemDialog(self.root, self.session, mode='edit', item=item)
+        dialog = ItemDialog(self.root, self.client, mode='edit', item=item)
         if dialog.result:
             self._refresh_all()
 
@@ -548,11 +594,11 @@ class MainWindow:
             return
 
         item_id = int(selection[0])
-        item = self.session.get(Item, item_id)
+        item = crud.get_item_by_id(self.client, item_id)
         if not item:
             return
 
         type_name = item.item_type.item_type_name if item.item_type else '—'
         if messagebox.askyesno('Подтверждение', f'Удалить товар "{type_name}"?'):
-            crud.delete_item(self.session, item_id)
+            crud.delete_item(self.client, item_id)
             self._refresh_all()

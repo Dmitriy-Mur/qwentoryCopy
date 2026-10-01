@@ -1,0 +1,70 @@
+"""HTTP-клиент к Warehouse API — единый источник данных десктопа."""
+from __future__ import annotations
+
+import json
+import os
+from typing import Any, Optional
+from urllib.error import HTTPError, URLError
+from urllib.parse import urlencode
+from urllib.request import Request, urlopen
+
+
+class ApiError(Exception):
+    def __init__(self, message: str, status: Optional[int] = None, detail: Any = None):
+        super().__init__(message)
+        self.status = status
+        self.detail = detail
+
+
+class ApiClient:
+    def __init__(self, base_url: Optional[str] = None, timeout: float = 8.0):
+        self.base_url = (base_url or os.getenv("API_BASE_URL", "http://127.0.0.1:8000")).rstrip("/")
+        self.timeout = timeout
+
+    def health(self) -> dict:
+        return self.get("/health")
+
+    def get(self, path: str, params: Optional[dict] = None) -> Any:
+        query = ""
+        if params:
+            filtered = {k: v for k, v in params.items() if v is not None}
+            if filtered:
+                query = "?" + urlencode(filtered)
+        return self._request("GET", path + query)
+
+    def post(self, path: str, body: Optional[dict] = None) -> Any:
+        return self._request("POST", path, body)
+
+    def patch(self, path: str, body: Optional[dict] = None) -> Any:
+        return self._request("PATCH", path, body)
+
+    def delete(self, path: str) -> Any:
+        return self._request("DELETE", path)
+
+    def _request(self, method: str, path: str, body: Optional[dict] = None) -> Any:
+        url = self.base_url + path
+        data = None
+        headers = {"Accept": "application/json"}
+        if body is not None:
+            data = json.dumps(body).encode("utf-8")
+            headers["Content-Type"] = "application/json"
+        request = Request(url, data=data, headers=headers, method=method)
+        try:
+            with urlopen(request, timeout=self.timeout) as response:
+                raw = response.read().decode("utf-8")
+                if not raw:
+                    return None
+                return json.loads(raw)
+        except HTTPError as error:
+            detail = error.read().decode("utf-8", errors="replace")
+            try:
+                payload = json.loads(detail)
+                message = payload.get("detail", detail)
+            except json.JSONDecodeError:
+                message = detail or str(error)
+            raise ApiError(str(message), status=error.code, detail=detail) from error
+        except URLError as error:
+            raise ApiError(
+                f"Сервер недоступен ({self.base_url}): {error.reason}. "
+                "Запустите API: uvicorn app.main:app --app-dir server --port 8000"
+            ) from error

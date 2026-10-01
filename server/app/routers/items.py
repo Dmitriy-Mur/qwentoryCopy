@@ -24,6 +24,7 @@ class ItemUpdate(BaseModel):
 
     quantity: int | None = Field(default=None, gt=0)
     box_id: int | None = None
+    item_type_id: int | None = None
 
 
 def ensure_box_exists(db, box_id):
@@ -72,11 +73,29 @@ LEFT JOIN box b ON b.box_id = i.box_id
 
 
 @router.get("")
-def get_items(box_id: int | None = None):
+def get_items(
+    box_id: int | None = None,
+    include_children: bool = False,
+    unboxed: bool = False,
+):
     query = ITEM_SELECT
     params: list = []
 
-    if box_id is not None:
+    if unboxed:
+        query += " WHERE i.box_id IS NULL"
+    elif box_id is not None and include_children:
+        query += """
+        WHERE i.box_id IN (
+            WITH RECURSIVE subtree(id) AS (
+                SELECT ?
+                UNION ALL
+                SELECT b.box_id FROM box b JOIN subtree s ON b.parent_id = s.id
+            )
+            SELECT id FROM subtree
+        )
+        """
+        params.append(box_id)
+    elif box_id is not None:
         query += " WHERE i.box_id = ?"
         params.append(box_id)
 
@@ -160,10 +179,9 @@ def update_item(item_id: int, update: ItemUpdate):
 
     try:
         with get_db() as db:
-            # Получаем текущий предмет
             current = db.execute(
                 """
-                SELECT item_id, box_id
+                SELECT item_id, box_id, item_type_id
                 FROM item
                 WHERE item_id = ?
                 """,
@@ -176,29 +194,40 @@ def update_item(item_id: int, update: ItemUpdate):
                     detail="Item not found"
                 )
 
-            # Если box_id передан в запросе,
-            # используем его. Если нет — оставляем старый.
             if "box_id" in update.model_fields_set:
                 new_box_id = update.box_id
             else:
                 new_box_id = current["box_id"]
 
-            # Если указана коробка — проверяем её существование.
+            if "item_type_id" in update.model_fields_set:
+                new_type_id = update.item_type_id
+                type_exists = db.execute(
+                    "SELECT 1 FROM item_type WHERE item_type_id = ?",
+                    (new_type_id,),
+                ).fetchone()
+                if type_exists is None:
+                    raise HTTPException(
+                        status_code=404,
+                        detail="Item type not found",
+                    )
+            else:
+                new_type_id = current["item_type_id"]
+
             if new_box_id is not None:
                 ensure_box_exists(db, new_box_id)
 
-            # Если quantity передан — меняем его.
-            # Если нет — оставляем старое значение.
             db.execute(
                 """
                 UPDATE item
                 SET quantity = COALESCE(?, quantity),
-                    box_id = ?
+                    box_id = ?,
+                    item_type_id = ?
                 WHERE item_id = ?
                 """,
                 (
                     update.quantity,
                     new_box_id,
+                    new_type_id,
                     item_id
                 )
             )
