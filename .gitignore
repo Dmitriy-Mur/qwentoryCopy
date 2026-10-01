@@ -4,4 +4,3 @@ __pycache__/
 
 # Android build artifacts
 build/
-.gradle/

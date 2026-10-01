@@ -33,6 +33,14 @@
         android:layout_height="wrap_content"
         android:text="Обновить"
         app:layout_constraintTop_toBottomOf="@id/tvPath"
+        app:layout_constraintEnd_toStartOf="@id/btnServer" />
+
+    <Button
+        android:id="@+id/btnServer"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Сервер"
+        app:layout_constraintTop_toBottomOf="@id/tvPath"
         app:layout_constraintEnd_toEndOf="parent" />
 
     <androidx.swiperefreshlayout.widget.SwipeRefreshLayout

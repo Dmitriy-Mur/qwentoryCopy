@@ -1,13 +1,18 @@
 package com.example.warehouse.ui;
 
+import android.content.DialogInterface;
 import android.os.Bundle;
+import android.text.InputType;
 import android.view.View;
+import android.widget.EditText;
 import android.widget.Toast;
 
+import androidx.appcompat.app.AlertDialog;
 import androidx.appcompat.app.AppCompatActivity;
 
 import com.example.warehouse.adapter.WarehouseAdapter;
 import com.example.warehouse.data.api.ApiClient;
+import com.example.warehouse.data.api.ServerConfig;
 import com.example.warehouse.data.model.BoxContents;
 import com.example.warehouse.data.model.BoxNode;
 import com.example.warehouse.databinding.ActivityMainBinding;
@@ -42,11 +47,14 @@ public class MainActivity extends AppCompatActivity {
         binding = ActivityMainBinding.inflate(getLayoutInflater());
         setContentView(binding.getRoot());
 
+        ApiClient.init(this);
+
         adapter = new WarehouseAdapter(this);
         binding.list.setAdapter(adapter);
 
         binding.btnRefresh.setOnClickListener(v -> loadTree());
         binding.btnUp.setOnClickListener(v -> goUp());
+        binding.btnServer.setOnClickListener(v -> showServerDialog());
         binding.swipeRefresh.setOnRefreshListener(this::loadTree);
 
         binding.list.setOnItemClickListener((parent, view, position, id) -> {
@@ -183,5 +191,42 @@ public class MainActivity extends AppCompatActivity {
 
     private void toast(String message) {
         Toast.makeText(this, message, Toast.LENGTH_SHORT).show();
+    }
+
+    /** Диалог настройки адреса сервера (для реального телефона — IP компьютера в LAN). */
+    private void showServerDialog() {
+        EditText input = new EditText(this);
+        input.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI);
+        input.setText(ServerConfig.getBaseUrl(this));
+        input.setSelection(input.getText().length());
+
+        new AlertDialog.Builder(this)
+                .setTitle("Адрес сервера")
+                .setMessage("Например: http://192.168.1.50:8000\n"
+                        + "Для эмулятора Android хост-машина доступна по 10.0.2.2")
+                .setView(input)
+                .setPositiveButton("Сохранить", (DialogInterface dialog, int which) -> {
+                    String url = ServerConfig.normalize(input.getText().toString());
+                    if (url.isEmpty()) {
+                        toast("Адрес не может быть пустым");
+                        return;
+                    }
+                    ServerConfig.setBaseUrl(this, url);
+                    toast("Сервер: " + url);
+                    loadTree();
+                })
+                .setNeutralButton("Сбросить", (DialogInterface dialog, int which) -> {
+                    ServerConfig.setBaseUrl(this, "");
+                    // normalize("") вернёт "", поэтому удалим значение напрямую:
+                    getSharedPreferences("server", MODE_PRIVATE)
+                            .edit().remove("base_url").apply();
+                    ApiClient.reset();
+                    ApiClient.init(this);
+                    toast("Использован адрес по умолчанию: "
+                            + com.example.warehouse.BuildConfig.API_BASE_URL);
+                    loadTree();
+                })
+                .setNegativeButton("Отмена", null)
+                .show();
     }
 }
