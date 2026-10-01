@@ -1,1 +1,11 @@
+
+# Python compiled files
+__pycache__/
+*.pyc
+
+# Android build artifacts
+build/
+.gradle/
+=======
 (empty)
+
