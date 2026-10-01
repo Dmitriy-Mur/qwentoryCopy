@@ -281,51 +281,10 @@ class MainWindow:
         # Разделители колонок + сортировка по клику на шапку
         for col, title, _w in self.COLUMNS:
             self.items_tree.heading(col, command=lambda c=col: self._sort_by_column(c))
-        self._setup_column_separators(cols)
-
-        # Перерисовываем разделители при прокрутке таблицы по горизонтали
-        self.table.xview_var.trace_add('write', lambda *_: self._update_column_separators())
 
         # Статус
         self.status_var = ctk.StringVar()
         ctk.CTkLabel(self.root, textvariable=self.status_var, anchor='w').pack(fill='x', padx=10, pady=(0, 5))
-
-    def _setup_column_separators(self, cols):
-        """Тонкие вертикальные разделители между колонками Treeview."""
-        self._sep_line = self.items_tree.create_line(
-            0, 0, 0, 100, fill=DARK_BORDER, width=1, tags=('colsep',))
-        self.items_tree.tag_lower('colsep')
-        self.items_tree.bind('<Configure>', lambda e: self._update_column_separators())
-
-    def _update_column_separators(self):
-        """Позиционировать разделители колонок (с учётом прокрутки по горизонтали)."""
-        tree = self.items_tree
-        cols = tree['columns']
-        bbox = tree.bbox('')
-        if not bbox:
-            tree.itemset(self._sep_line, points=[], state='hidden')
-            return
-
-        x0, y0, w0, h0 = bbox
-        total_w = sum(tree.column(c, 'width') for c in cols) or 1
-
-        # Границы колонок в пикселях канваса Treeview.
-        # Если есть горизонтальная прокрутка — смещаем на позицию видимой области.
-        first, _last = tree.xview()
-        offset = first * total_w
-        xs = x0 - offset
-        points = []
-        for c in cols[:-1]:
-            xs += tree.column(c, 'width')
-            if x0 <= xs <= x0 + w0:
-                points.extend([xs, y0, xs, y0 + h0])
-        # левый край видимой области тоже стоит отделить, если прокрутили
-        if points and offset > 0:
-            points = [x0, y0, x0, y0 + h0] + points
-        if points:
-            tree.itemset(self._sep_line, points=points, state='normal')
-        else:
-            tree.itemset(self._sep_line, points=[], state='hidden')
 
     # ------------------------------------------------------------------ data
     def _refresh_all(self):
@@ -503,7 +462,7 @@ class MainWindow:
             self.items_tree.see(keep_iid)
 
         self.items_tree.update_idletasks()
-        self._update_column_separators()
+        self.table.refresh_column_separators()
 
     # -------------------------------------------------------------- handlers
     def _on_tree_select(self, box_id):

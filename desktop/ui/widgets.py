@@ -96,13 +96,10 @@ class AutoScrollbar(ttk.Scrollbar):
         if float(lo) <= 0.0 and float(hi) >= 1.0:
             # содержимое помещается целиком — прячем скроллбар
             self.pack_forget()
-            self.grid_remove()
             # блокируем отрисовку ползунка
             super().set(0.0, 1.0)
             return
-        if not self.winfo_manager() and not self.winfo_gridname():
-            self._autoshow()
-        elif self.winfo_ismapped() == 0:
+        if not self.winfo_manager() or not self.winfo_ismapped():
             self._autoshow()
         super().set(lo, hi)
 
@@ -160,6 +157,75 @@ class DarkTableFrame(ctk.CTkFrame):
         self.tree.tag_configure('evenrow', background=DARK_PANEL)
         self._row_count = 0
 
+        # Разделители колонок: Treeview не умеет рисовать линии между
+        # столбцами, поэтому поверх него размещается прозрачный canvas
+        # с тонкими вертикальными линиями (см. refresh_column_separators).
+        self._sep_canvas = tk.Canvas(
+            self.tree, highlightthickness=0, bd=0, bg='#000001',
+            cursor='arrow',
+        )
+        self._sep_canvas.place(relx=0, rely=0, relwidth=1, relheight=1)
+        # клики и колесо мыши должны проходить сквозь разделители к таблице
+        self._sep_canvas.bind('<Button-1>', self._sep_pass_through, add='+')
+        for event in ('<B1-Motion>', '<ButtonRelease-1>', '<Double-1>',
+                      '<MouseWheel>', '<Button-4>', '<Button-5>'):
+            self._sep_canvas.bind(event, lambda e: None, add='+')
+        self._sep_pending = None
+        self.tree.bind('<Configure>',
+                       lambda e: self.refresh_column_separators(), add='+')
+
+    def _sep_pass_through(self, event):
+        """Передать клик из области разделителей обратно в Treeview.
+
+        Canvas с разделителями лежит поверх всей таблицы, поэтому клики
+        по строкам и шапкам нужно перенаправлять самому Treeview — иначе
+        не работает выделение строк и сортировка по нажатию на заголовок.
+        """
+        self.tree.event_generate('<Button-1>', rootx=event.x_root,
+                                 rooty=event.y_root)
+        return None
+
+    def refresh_column_separators(self):
+        """Перерисовать вертикальные разделители между колонками Treeview."""
+        if self._sep_pending is not None:
+            try:
+                self.after_cancel(self._sep_pending)
+            except Exception:
+                pass
+        self._sep_pending = self.after_idle(self._draw_column_separators)
+
+    def _draw_column_separators(self):
+        self._sep_pending = None
+        canvas = self._sep_canvas
+        tree = self.tree
+        canvas.delete('all')
+        if not canvas.winfo_exists() or not tree.winfo_exists():
+            return
+        w, h = canvas.winfo_width(), canvas.winfo_height()
+        if w <= 1 or h <= 1:
+            return
+        cols = tree['columns']
+        if len(cols) < 2:
+            return
+
+        # смещение горизонтальной прокрутки в пикселях
+        first, last = tree.xview()
+        total_w = sum(tree.column(c, 'width') for c in cols)
+        offset = int(first * total_w)
+
+        # нижняя граница области заголовка — рисуем только под ней
+        try:
+            bbox = tree.bbox('')
+        except tk.TclError:
+            bbox = None
+        top = (bbox[1] + bbox[3]) if bbox else 0
+
+        x = -offset
+        for c in cols[:-1]:
+            x += tree.column(c, 'width')
+            if top < x < w:
+                canvas.create_line(x, top, x, h, fill=DARK_BORDER)
+
     def _xview_command(self, *args):
         self.tree.xview(*args)
         self._sync_xview_var()
@@ -167,6 +233,7 @@ class DarkTableFrame(ctk.CTkFrame):
     def _xset(self, lo, hi):
         self._hbar.set(lo, hi)
         self.xview_var.set(f'{lo} {hi}')
+        self.refresh_column_separators()
 
     def _sync_xview_var(self):
         lo, hi = self.tree.xview()
@@ -277,9 +344,15 @@ class DarkScrollableFrame(ctk.CTkScrollableFrame):
         if bottom - top < 20:
             bottom = min(h, top + 20)
         pad = 2
-        self._auto_bar.create_rectangle(pad, top, w - pad, bottom, radius=4,
-                                        fill=self._apply_appearance_mode(self.BAR_COLOR),
-                                        outline='')
+        try:
+            self._auto_bar.create_rectangle(pad, top, w - pad, bottom, radius=4,
+                                            fill=self._apply_appearance_mode(self.BAR_COLOR),
+                                            outline='')
+        except tk.TclError:
+            # Tk < 8.7 не поддерживает сглаженные углы у прямоугольников
+            self._auto_bar.create_rectangle(pad, top, w - pad, bottom,
+                                            fill=self._apply_appearance_mode(self.BAR_COLOR),
+                                            outline='')
 
     # -- взаимодействие -------------------------------------------------------
     def _value_from_y(self, y):
