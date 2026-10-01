@@ -1,6 +1,7 @@
 from pathlib import Path
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
 from app.database import get_db, DB_PATH
 from app.routers.box_types import router as box_types_router
@@ -17,6 +18,16 @@ app = FastAPI(
     title="Warehouse Management API",
     description="Backend для АСУ складского учёта",
     version="0.1.0",
+)
+
+# CORS: мобильное приложение и другие HTTP-клиенты могут обращаться к API
+# с любого источника (сервер работает без аутентификации).
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 
