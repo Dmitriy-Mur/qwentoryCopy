@@ -68,14 +68,13 @@ class TreeWidget(DarkScrollableFrame):
         btn.pack(fill='x', expand=True)
         row.pack(fill='x', pady=1)
         self.nodes[node_id] = {'row': row, 'btn': btn, 'toggle': None,
-                               'children_btn': None, 'level': 0,
-                               'expanded': True, 'has_children': False}
+                               'level': 0, 'expanded': True, 'has_children': False}
 
     def add_box_node(self, box: Box, parent_id: Optional[int], level: int = 0,
                      has_children: bool = False, expanded: bool = True):
         """Добавить узел контейнера (плоский ряд с отступом по уровню)."""
-        type_name = box.box_type.box_type_name if box.box_type else ''
-        label = f'{box.box_name} [{type_name}]'
+        # В дереве показываем только название контейнера, без типа в скобках
+        label = box.box_name
 
         row = ctk.CTkFrame(self, fg_color='transparent')
         row.pack(fill='x', pady=1, padx=(level * self.INDENT, 0))
@@ -107,7 +106,7 @@ class TreeWidget(DarkScrollableFrame):
         btn.pack(side='left', fill='x', expand=True)
 
         self.nodes[box.box_id] = {'row': row, 'btn': btn, 'toggle': toggle,
-                                  'children_btn': None, 'level': level,
+                                  'level': level,
                                   'expanded': expanded, 'has_children': has_children}
 
     # ------------------------------------------------------- раскрытие узлов
@@ -120,23 +119,20 @@ class TreeWidget(DarkScrollableFrame):
     def _apply_visibility(self):
         """Скрыть/показать ряды в соответствии с состоянием раскрытия.
 
-        Узлы идут в порядке DFS, поэтому достаточно одного «горизонта»:
-        всё, что находится глубже свёрнутого узла, скрыто до его родителя.
+        Узлы идут в порядке обхода дерева (родитель раньше потомков),
+        поэтому достаточно одного «горизонта»: всё, что находится глубже
+        свёрнутого узла, скрыто до его родителя.
         """
         max_visible_level = 10 ** 9
-        for box_id, node in self.nodes.items():
+        # Специальные узлы (id None / -1) идут первыми, затем контейнеры по id —
+        # порядок обхода дерева: родитель раньше потомков.
+        def node_order(box_id):
+            return (0, 0) if not isinstance(box_id, int) else (1, box_id)
+        for box_id, node in sorted(self.nodes.items(), key=lambda kv: node_order(kv[0])):
             if node['level'] > max_visible_level:
                 node['row'].pack_forget()
                 continue
             node['row'].pack(fill='x', pady=1, padx=(node['level'] * self.INDENT, 0))
-
-            badge = node.get('children_btn')
-            if badge is not None:
-                if node['expanded']:
-                    badge.pack(fill='x', pady=1,
-                               padx=(node['level'] * self.INDENT + self.INDENT, 0))
-                else:
-                    badge.pack_forget()
 
             if node['has_children'] and not node['expanded']:
                 max_visible_level = node['level'] - 1
@@ -347,8 +343,6 @@ class MainWindow:
         for lst in children_map.values():
             lst.sort(key=lambda b: natural_key(b.box_name))
 
-        by_id = {b.box_id: b for b in all_boxes}
-
         def walk(parent_id, level):
             for box in children_map.get(parent_id, []):
                 has_children = bool(children_map.get(box.box_id))
@@ -359,34 +353,6 @@ class MainWindow:
 
         walk(None, 0)
 
-        # Отметить узлы, у которых есть товары (для кнопки «N товаров»)
-        items = crud.get_all_items(self.client)
-        counts: dict = {}
-        for item in items:
-            if item.box_id is None:
-                continue
-            seen = set()
-            cur = by_id.get(item.box_id)
-            while cur is not None and cur.box_id not in seen:
-                seen.add(cur.box_id)
-                counts[cur.box_id] = counts.get(cur.box_id, 0) + 1
-                cur = cur.parent
-        for bid, count in counts.items():
-            if bid in self.tree.nodes:
-                badge = ctk.CTkButton(
-                    self.tree,
-                    text=f'{count} товар(ов)',
-                    height=24,
-                    corner_radius=6,
-                    anchor='w',
-                    fg_color='transparent',
-                    hover_color=TreeWidget.HOVER_COLOR,
-                    text_color=('#666666', '#9e9e9e'),
-                    font=ctk.CTkFont(size=11),
-                    command=lambda b=by_id[bid]: self._show_subtree_items(b),
-                )
-                self.tree.nodes[bid]['children_btn'] = badge
-
         self.tree._apply_visibility()
         self.tree.update_idletasks()
         self.tree._after_content_change()
@@ -395,10 +361,6 @@ class MainWindow:
             self.tree.select_node(selected)
         else:
             self.tree.select_node(None)
-
-    def _show_subtree_items(self, box: Box):
-        """Выбрать контейнер и показать товары вместе со всеми потомками."""
-        self.tree.select_node(box.box_id)
 
     # --------------------------------------------------------------- sorting
     def _sort_key_for_row(self, row, col):
