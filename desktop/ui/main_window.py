@@ -183,7 +183,6 @@ class MainWindow:
         ('type', 'Тип товара', 200),
         ('quantity', 'Количество', 100),
         ('weight', 'Вес', 110),
-        ('date', 'Дата', 150),
         ('location', 'Расположение', 250),
     )
 
@@ -378,8 +377,6 @@ class MainWindow:
                 num = float(m.group(1).replace(',', '.'))
                 return (0, num * 1000 if m.group(2) == 'кг' else num)
             return (0, 0)
-        if col == 'date':
-            return (1, str(value))
         return (2, natural_key(value))
 
     def _sort_by_column(self, col):
@@ -426,10 +423,9 @@ class MainWindow:
             type_name = item.item_type.item_type_name if item.item_type else '—'
             weight = item.total_weight_g
             weight_str = f'{weight / 1000:.2f} кг' if weight > 1000 else f'{weight} г'
-            date_str = item.date.strftime('%Y-%m-%d %H:%M') if item.date else '—'
             location = crud.get_box_full_path(self.client, item.box_id)
             self._current_rows.append((str(item.item_id),
-                                       (type_name, item.quantity, weight_str, date_str, location)))
+                                       (type_name, item.quantity, weight_str, location)))
 
         self._render_items_table()
 
@@ -442,7 +438,7 @@ class MainWindow:
             scale = f' | Весы: {self.scale_monitor.last_weight:.1f} г'
         self.status_var.set(
             f'Позиций: {len(items)} | Общее кол-во: {total_qty} | Общий вес: {weight_str}'
-            f'{scale} | API: {self.client.base_url}'
+            f'{scale}'
         )
 
     def _render_items_table(self):
